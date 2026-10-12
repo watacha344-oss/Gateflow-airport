@@ -1,0 +1,129 @@
+<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>GateFlow Pro – Sanjay Intl</title>
+<style>
+:root{--g:rgba(18,22,32,.82);--t:#f2ede5;--m:#9aa1b3;--a:#FF6A1A;--bd:rgba(255,255,255,.15);box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden;background:#0a101e;font:13px system-ui,sans-serif;color:var(--t)}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+.gl{background:var(--g);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);border:1px solid var(--bd);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+#top{position:fixed;left:8px;right:8px;top:8px;display:flex;gap:8px;align-items:center;padding:8px 12px;z-index:5}
+.logo{font-weight:750;letter-spacing:.4px}.logo b{color:var(--a)}.logo small{color:var(--m);font-weight:400;margin-left:6px}
+#kpi{position:fixed;left:8px;top:70px;display:flex;gap:8px;z-index:4}
+.k{padding:8px 12px;min-width:110px}.k small{color:var(--m);display:block;font-size:11px}.k b{font-size:18px}.k i{font-style:normal;color:var(--a);font-size:11px;margin-left:4px}
+#bot{position:fixed;left:8px;right:8px;bottom:8px;display:flex;gap:8px;z-index:4;height:120px}
+#info{flex:1;padding:12px;overflow:auto}
+</style></head><body>
+<div id="top" class="gl"><div class="logo"><b>●</b> GateFlow Pro<small>AIエージェント＆リアルタイム3D</small></div></div>
+<div id="kpi">
+  <div class="gl k"><small>アクティブ乗客</small><b id="pCount">0</b><i>人</i></div>
+  <div class="gl k"><small>運行車両</small><b>6</b><i>台</i></div>
+  <div class="gl k"><small>システムFPS</small><b id="fps">60</b><i>fps</i></div>
+</div>
+<div id="bot"><div id="info" class="gl"><b>Markによる実装メモ:</b> 空港ターミナル内を1人ずつ独立して歩く乗客エージェントのAIロジックと、物理ベースレンダリング（PBR）を強化しました。</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(()=>{
+const T=THREE,PI=Math.PI;
+const R=new T.WebGLRenderer({antialias:true,powerPreference:"high-performance"});
+R.setPixelRatio(Math.min(devicePixelRatio,2));
+R.shadowMap.enabled=true;
+R.shadowMap.type=T.PCFSoftShadowMap;
+R.toneMapping=T.ACESFilmicToneMapping;
+R.toneMappingExposure=1.2;
+document.body.prepend(R.domElement);
+
+const S=new T.Scene();
+S.background=new T.Color(0x0a101e);
+S.fog=new T.FogExp2(0x0a101e,.002);
+
+const cam=new T.PerspectiveCamera(30,innerWidth/innerHeight,1,1000);
+cam.position.set(0,70,90);
+cam.lookAt(0,0,0);
+
+const hemi=new T.HemisphereLight(0xfff6ec,0x223344,1.1);S.add(hemi);
+const sun=new T.DirectionalLight(0xfff0dd,1.8);
+sun.position.set(60,100,40);
+sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.bias=-0.0005;
+S.add(sun);
+
+// 地面・ターミナル床面
+const floorMat=new T.MeshStandardMaterial({color:0x162032,roughness:0.8,metalness:0.2});
+const floor=new T.Mesh(new T.PlaneGeometry(300,200),floorMat);
+floor.rotation.x=-PI/2;
+floor.receiveShadow=true;
+S.add(floor);
+
+// ターミナル建物ブロック
+const buildMat=new T.MeshStandardMaterial({color:0xe0e6ed,roughness:0.5});
+const terminal=new T.Mesh(new T.BoxGeometry(120,12,25),buildMat);
+terminal.position.set(0,6,-30);
+terminal.castShadow=terminal.receiveShadow=true;
+S.add(terminal);
+
+// ガラス窓
+const glassMat=new T.MeshStandardMaterial({color:0x8bc9de,roughness:0.1,transparent:true,opacity:0.6,emissive:0xffa500,emissiveIntensity:0.1});
+const glass=new T.Mesh(new T.BoxGeometry(116,9,1),glassMat);
+glass.position.set(0,5.5,-17.5);
+S.add(glass);
+
+// 1人ずつ独立して動く乗客エージェント（AI）
+const passengers=[];
+const paxGeo=new T.BoxGeometry(0.8,1.8,0.8);
+const paxMat=new T.MeshStandardMaterial({color:0xFF6A1A,roughness:0.4});
+
+for(let i=0;i<25;i++){
+  const mesh=new T.Mesh(paxGeo,paxMat);
+  mesh.castShadow=true;
+  const x=(Math.random()-0.5)*80;
+  const z=Math.random()*40-10;
+  mesh.position.set(x,0.9,z);
+  S.add(mesh);
+  
+  passengers.push({
+    mesh,
+    x, z,
+    targetX: (Math.random()-0.5)*80,
+    targetZ: Math.random()*40-10,
+    speed: 0.05 + Math.random()*0.05,
+    wait: 0
+  });
+}
+document.getElementById('pCount').textContent=passengers.length;
+
+// アニメーションループ
+const clock=new T.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=clock.getDelta();
+
+  // エージェントの独立歩行ロジック
+  passengers.forEach(p=>{
+    if(p.wait > 0){
+      p.wait -= dt;
+      return;
+    }
+    const dx=p.targetX - p.x;
+    const dz=p.targetZ - p.z;
+    const dist=Math.hypot(dx,dz);
+    if(dist < 1){
+      p.targetX=(Math.random()-0.5)*80;
+      p.targetZ=Math.random()*40-10;
+      p.wait=Math.random()*3;
+    } else {
+      p.x += (dx/dist)*p.speed;
+      p.z += (dz/dist)*p.speed;
+      p.mesh.position.set(p.x, 0.9, p.z);
+      p.mesh.rotation.y = Math.atan2(dx, dz);
+    }
+  });
+
+  R.render(S,cam);
+}
+animate();
+
+window.addEventListener('resize',()=>{
+  R.setSize(innerWidth,innerHeight);
+  cam.aspect=innerWidth/innerHeight;
+  cam.updateProjectionMatrix();
+});
+</script></body></html>
