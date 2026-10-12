@@ -1,158 +1,1800 @@
-<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>GateFlow Pro – Sanjay Intl</title>
-<style>
-:root{--g:rgba(18,22,32,.85);--t:#f2ede5;--m:#9aa1b3;--a:#FF6A1A;--bd:rgba(255,255,255,.15);box-sizing:border-box}
-html,body{height:100%;margin:0;overflow:hidden;background:#070b14;font:13px system-ui,sans-serif;color:var(--t)}
-canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:1;display:block;touch-action:none}
-.gl{background:var(--g);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid var(--bd);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.5);z-index:10;position:relative}
-#top{position:fixed;left:10px;right:10px;top:10px;display:flex;gap:10px;align-items:center;padding:8px 14px;z-index:10}
-.logo{font-weight:750;letter-spacing:.4px}.logo b{color:var(--a)}.logo small{color:var(--m);font-weight:400;margin-left:6px}
-#kpi{position:fixed;left:10px;top:65px;display:flex;gap:8px;z-index:10}
-.k{padding:8px 12px;min-width:95px}.k small{color:var(--m);display:block;font-size:10px}.k b{font-size:16px}.k i{font-style:normal;color:var(--a);font-size:10px;margin-left:3px}
-#bot{position:fixed;left:10px;right:10px;bottom:10px;display:flex;gap:8px;z-index:10;height:95px}
-#info{flex:1;padding:10px 14px;overflow:auto;font-size:12px;line-height:1.4}
-@media(max-width:760px){#kpi{top:60px}#bot{height:80px}}
-</style></head><body>
-<div id="top" class="gl"><div class="logo"><b>●</b> GateFlow Pro<small>AIエージェント＆リアルタイム3D</small></div></div>
-<div id="kpi">
-  <div class="gl k"><small>アクティブ乗客</small><b id="pCount">0</b><i>人</i></div>
-  <div class="gl k"><small>運行車両</small><b id="vCount">4</b><i>台</i></div>
-  <div class="gl k"><small>システムFPS</small><b id="fps">60</b><i>fps</i></div>
-</div>
-<div id="bot"><div id="info" class="gl"><b>[Mark & Andrew 共同開発サイクル2]</b> キャンバスの描画不具合を解消し、AIエージェントと車両、PBRライティングを完全統合しました。iPadウィジェットサイズに最適化されています。</div></div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script>
-(()=>{
-const T=THREE,PI=Math.PI;
-const R=new T.WebGLRenderer({antialias:true,powerPreference:"high-performance"});
-R.setPixelRatio(Math.min(devicePixelRatio,2));
-R.setSize(innerWidth,innerHeight);
-R.shadowMap.enabled=true;
-R.shadowMap.type=T.PCFSoftShadowMap;
-R.toneMapping=T.ACESFilmicToneMapping;
-R.toneMappingExposure=1.3;
-document.body.prepend(R.domElement);
-
-const S=new T.Scene();
-S.background=new T.Color(0x070b14);
-S.fog=new T.FogExp2(0x070b14,.0022);
-
-const cam=new T.PerspectiveCamera(32,innerWidth/innerHeight,1,1000);
-cam.position.set(0,45,75);
-cam.lookAt(0,0,0);
-
-const hemi=new T.HemisphereLight(0xfff6ec,0x1b2838,1.2);S.add(hemi);
-const sun=new T.DirectionalLight(0xfff0dd,2.0);
-sun.position.set(50,80,30);
-sun.castShadow=true;
-sun.shadow.mapSize.set(2048,2048);
-sun.shadow.bias=-0.0004;
-S.add(sun);
-
-// 床面・滑走路
-const floorMat=new T.MeshStandardMaterial({color:0x111827,roughness:0.8,metalness:0.2});
-const floor=new T.Mesh(new T.PlaneGeometry(300,200),floorMat);
-floor.rotation.x=-PI/2;
-floor.receiveShadow=true;
-S.add(floor);
-
-// ターミナル建物
-const buildMat=new T.MeshStandardMaterial({color:0xe2e8f0,roughness:0.4});
-const terminal=new T.Mesh(new T.BoxGeometry(100,10,22),buildMat);
-terminal.position.set(0,5,-25);
-terminal.castShadow=terminal.receiveShadow=true;
-S.add(terminal);
-
-const glassMat=new T.MeshStandardMaterial({color:0x7dd3fc,roughness:0.1,transparent:true,opacity:0.65,emissive:0x38bdf8,emissiveIntensity:0.2});
-const glass=new T.Mesh(new T.BoxGeometry(96,7.5,0.8),glassMat);
-glass.position.set(0,4.5,-14.2);
-S.add(glass);
-
-// 1人ずつ独立して動く乗客エージェント
-const passengers=[];
-const paxGeo=new T.BoxGeometry(0.7,1.7,0.7);
-const paxMat=new T.MeshStandardMaterial({color:0xFF6A1A,roughness:0.3,metalness:0.1});
-
-for(let i=0;i<30;i++){
-  const mesh=new T.Mesh(paxGeo,paxMat);
-  mesh.castShadow=true;
-  const x=(Math.random()-0.5)*70;
-  const z=Math.random()*35-8;
-  mesh.position.set(x,0.85,z);
-  S.add(mesh);
-  
-  passengers.push({
-    mesh, x, z,
-    targetX: (Math.random()-0.5)*70,
-    targetZ: Math.random()*35-8,
-    speed: 0.04 + Math.random()*0.04,
-    wait: 0
-  });
-}
-document.getElementById('pCount').textContent=passengers.length;
-
-// 空港車両エージェント
-const vehicles=[];
-const vehGeo=new T.BoxGeometry(3.2,1.2,1.6);
-const vehMat=new T.MeshStandardMaterial({color:0x38bdf8,roughness:0.4});
-
-for(let i=0;i<4;i++){
-  const mesh=new T.Mesh(vehGeo,vehMat);
-  mesh.castShadow=true;
-  const x=-40 + i*25;
-  mesh.position.set(x,0.6,12);
-  S.add(mesh);
-  vehicles.push({ mesh, x, z:12, dir: i%2===0?1:-1, speed: 0.08 });
-}
-
-// アニメーションループ
-const clock=new T.Clock();
-let frameCount=0, lastTime=performance.now();
-
-function animate(){
-  requestAnimationFrame(animate);
-  const dt=clock.getDelta();
-
-  // FPS計測
-  frameCount++;
-  const now=performance.now();
-  if(now - lastTime >= 1000){
-    document.getElementById('fps').textContent=Math.round((frameCount * 1000) / (now - lastTime));
-    frameCount=0; lastTime=now;
-  }
-
-  // 乗客の歩行AI
-  passengers.forEach(p=>{
-    if(p.wait > 0){ p.wait -= dt; return; }
-    const dx=p.targetX - p.x;
-    const dz=p.targetZ - p.z;
-    const dist=Math.hypot(dx,dz);
-    if(dist < 1){
-      p.targetX=(Math.random()-0.5)*70;
-      p.targetZ=Math.random()*35-8;
-      p.wait=Math.random()*4;
-    } else {
-      p.x += (dx/dist)*p.speed;
-      p.z += (dz/dist)*p.speed;
-      p.mesh.position.set(p.x, 0.85, p.z);
-      p.mesh.rotation.y = Math.atan2(dx, dz);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Gateflow — Sanjai International Airport Operations Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <!-- Three.js & OrbitControls from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    :root {
+      --primary: #FF6A1A;
+      --primary-hover: #e55912;
+      --bg-warm: #F7F5F0;
+      --bg-card: rgba(255, 255, 255, 0.85);
+      --bg-card-solid: #FFFFFF;
+      --text-main: #1A1A1A;
+      --text-muted: #6B7280;
+      --border-glass: rgba(255, 255, 255, 0.6);
+      --shadow-glass: 0 8px 32px 0 rgba(31, 38, 135, 0.07);
+      --font-main: 'Plus Jakarta Sans', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
     }
-  });
 
-  // 車両の走行
-  vehicles.forEach(v=>{
-    v.x += v.dir * v.speed;
-    if(Math.abs(v.x) > 55) v.dir *= -1;
-    v.mesh.position.x = v.x;
-    v.mesh.rotation.y = v.dir > 0 ? 0 : PI;
-  });
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
 
-  R.render(S,cam);
-}
-animate();
+    body {
+      font-family: var(--font-main);
+      background-color: var(--bg-warm);
+      color: var(--text-main);
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
 
-window.addEventListener('resize',()=>{
-  R.setSize(innerWidth,innerHeight);
-  cam.aspect=innerWidth/innerHeight;
-  cam.updateProjectionMatrix();
-});
-</script></body></html>
+    #canvas-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* UI Overlay Layer */
+    #ui-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+      display: grid;
+      grid-template-rows: 64px 1fr;
+      grid-template-columns: 1fr;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    .interactive {
+      pointer-events: auto;
+    }
+
+    /* Glassmorphic Panel Base */
+    .glass-panel {
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--border-glass);
+      box-shadow: var(--shadow-glass);
+      border-radius: 16px;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    /* Top Bar */
+    header.glass-panel {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      height: 60px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 36px;
+      height: 36px;
+      background: var(--primary);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 800;
+      font-size: 18px;
+      box-shadow: 0 4px 12px rgba(255, 106, 26, 0.3);
+    }
+
+    .brand-title h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      line-height: 1.2;
+    }
+
+    .brand-title span {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .search-box {
+      position: relative;
+      width: 240px;
+    }
+
+    .search-box input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.04);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 10px;
+      padding: 8px 12px 8px 36px;
+      font-family: var(--font-main);
+      font-size: 13px;
+      color: var(--text-main);
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    .search-box input:focus {
+      background: white;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px rgba(255, 106, 26, 0.15);
+    }
+
+    .search-box svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      fill: var(--text-muted);
+    }
+
+    /* Area Switcher */
+    .area-switcher {
+      display: flex;
+      gap: 4px;
+      background: rgba(0, 0, 0, 0.04);
+      padding: 4px;
+      border-radius: 12px;
+    }
+
+    .area-btn {
+      background: transparent;
+      border: none;
+      padding: 6px 14px;
+      font-family: var(--font-main);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .area-btn:hover {
+      color: var(--text-main);
+    }
+
+    .area-btn.active {
+      background: white;
+      color: var(--text-main);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+
+    .top-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .control-dropdown {
+      position: relative;
+    }
+
+    .pill-btn {
+      background: rgba(0, 0, 0, 0.04);
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      padding: 6px 12px;
+      border-radius: 10px;
+      font-family: var(--font-main);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+
+    .pill-btn:hover {
+      background: rgba(0, 0, 0, 0.08);
+    }
+
+    .dropdown-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      background: var(--bg-card-solid);
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 12px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+      width: 160px;
+      padding: 6px;
+      display: none;
+      z-index: 100;
+    }
+
+    .dropdown-menu.show {
+      display: block;
+      animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .dropdown-item {
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-main);
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: background 0.15s;
+    }
+
+    .dropdown-item:hover {
+      background: var(--bg-warm);
+    }
+
+    .dropdown-item.active {
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .live-clock {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+      background: rgba(0,0,0,0.04);
+      padding: 6px 10px;
+      border-radius: 8px;
+    }
+
+    .user-avatar {
+      width: 32px;
+      height: 32px;
+      background: #111;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Main Dashboard Layout */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 360px 1fr 380px;
+      grid-template-rows: auto 1fr;
+      gap: 16px;
+      height: calc(100vh - 92px);
+      pointer-events: none;
+    }
+
+    .interactive-panel {
+      pointer-events: auto;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* KPI Header Bar */
+    .kpi-container {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr) 2fr;
+      gap: 16px;
+      pointer-events: none;
+    }
+
+    .kpi-card {
+      pointer-events: auto;
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .kpi-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .kpi-value {
+      font-size: 20px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+      letter-spacing: -0.02em;
+    }
+
+    .kpi-sub {
+      font-size: 11px;
+      color: #10B981;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .alerts-ticker {
+      pointer-events: auto;
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: rgba(255, 106, 26, 0.08);
+      border-color: rgba(255, 106, 26, 0.2);
+    }
+
+    .alert-badge {
+      background: var(--primary);
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      animation: pulseAlert 2s infinite;
+    }
+
+    @keyframes pulseAlert {
+      0% { opacity: 1; }
+      50% { opacity: 0.6; }
+      100% { opacity: 1; }
+    }
+
+    .alert-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Left Sidebar: Turnaround Tracker */
+    .sidebar-left {
+      grid-column: 1 / 2;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .panel-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .turnaround-content {
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .flight-head-mini {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      background: rgba(0,0,0,0.03);
+      padding: 10px 14px;
+      border-radius: 12px;
+    }
+
+    .flight-callsign {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--primary);
+    }
+
+    .flight-dest {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .timeline {
+      position: relative;
+      padding-left: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 7px;
+      top: 6px;
+      bottom: 6px;
+      width: 2px;
+      background: rgba(0,0,0,0.08);
+    }
+
+    .timeline-item {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .timeline-dot {
+      position: absolute;
+      left: -20px;
+      top: 4px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #D1D5DB;
+      border: 2px solid white;
+      transition: all 0.3s;
+    }
+
+    .timeline-item.completed .timeline-dot {
+      background: #10B981;
+    }
+
+    .timeline-item.active .timeline-dot {
+      background: var(--primary);
+      box-shadow: 0 0 0 4px rgba(255, 106, 26, 0.2);
+    }
+
+    .timeline-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+
+    .timeline-item.completed .timeline-title,
+    .timeline-item.active .timeline-title {
+      color: var(--text-main);
+    }
+
+    .timeline-time {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* Right Sidebar: Live Detail Panel */
+    .sidebar-right {
+      grid-column: 3 / 4;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .detail-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .detail-banner {
+      background: linear-gradient(135deg, rgba(255,106,26,0.1), rgba(255,106,26,0.02));
+      border: 1px solid rgba(255,106,26,0.2);
+      border-radius: 12px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .detail-category {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--primary);
+    }
+
+    .detail-name {
+      font-size: 18px;
+      font-weight: 800;
+      font-family: var(--font-mono);
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .stat-box {
+      background: rgba(0,0,0,0.03);
+      padding: 12px;
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+    }
+
+    .stat-val {
+      font-size: 14px;
+      font-weight: 700;
+      font-family: var(--font-mono);
+    }
+
+    .action-row {
+      display: flex;
+      gap: 8px;
+      margin-top: auto;
+    }
+
+    .btn {
+      flex: 1;
+      background: var(--primary);
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-family: var(--font-main);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      box-shadow: 0 4px 12px rgba(255, 106, 26, 0.25);
+    }
+
+    .btn:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-secondary {
+      background: rgba(0,0,0,0.05);
+      color: var(--text-main);
+      box-shadow: none;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(0,0,0,0.08);
+    }
+
+    /* Bottom Center: Tabbed Live Table */
+    .bottom-table-container {
+      grid-column: 2 / 3;
+      align-self: end;
+      max-height: 280px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .table-tabs {
+      display: flex;
+      gap: 8px;
+      padding: 12px 16px 0 16px;
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      padding: 6px 12px;
+      font-family: var(--font-main);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-main);
+    }
+
+    .tab-btn.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    .table-content {
+      padding: 12px 16px;
+      overflow-y: auto;
+      max-height: 200px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      text-align: left;
+    }
+
+    th {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(0,0,0,0.06);
+    }
+
+    td {
+      padding: 8px 0;
+      font-weight: 500;
+      border-bottom: 1px solid rgba(0,0,0,0.03);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .mono {
+      font-family: var(--font-mono);
+    }
+
+    .status-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 6px;
+      display: inline-block;
+      text-transform: uppercase;
+    }
+
+    .status-pill.active {
+      background: rgba(16, 185, 129, 0.15);
+      color: #059669;
+    }
+
+    .status-pill.taxi {
+      background: rgba(245, 158, 11, 0.15);
+      color: #D97706;
+    }
+
+    .status-pill.stand {
+      background: rgba(59, 130, 246, 0.15);
+      color: #2563EB;
+    }
+
+    /* 3D Floating Labels */
+    .object-label {
+      position: absolute;
+      transform: translate(-50%, -100%);
+      background: rgba(26, 26, 26, 0.85);
+      backdrop-filter: blur(8px);
+      color: white;
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: var(--font-mono);
+      pointer-events: none;
+      white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      transition: opacity 0.2s;
+      opacity: 0;
+      z-index: 5;
+    }
+
+    .object-label.visible {
+      opacity: 1;
+    }
+
+    .object-label::after {
+      content: '';
+      position: absolute;
+      bottom: -4px;
+      left: 50%;
+      transform: translateX(-50%);
+      border-width: 4px 4px 0;
+      border-style: solid;
+      border-color: rgba(26, 26, 26, 0.85) transparent;
+      display: block;
+      width: 0;
+    }
+
+    /* Mobile Responsive / Bottom Sheet */
+    @media (max-width: 1024px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+        height: calc(100vh - 80px);
+        overflow-y: auto;
+      }
+      .kpi-container {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .sidebar-left, .sidebar-right, .bottom-table-container {
+        display: none; /* Can toggle in mobile via bottom sheet */
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="canvas-container"></div>
+
+  <!-- UI Overlay -->
+  <div id="ui-layer">
+    <!-- Top Bar -->
+    <header class="glass-panel interactive">
+      <div class="brand">
+        <div class="brand-logo">G</div>
+        <div class="brand-title">
+          <h1>Gateflow</h1>
+          <span>Sanjai Int. Airport</span>
+        </div>
+      </div>
+
+      <div class="search-box">
+        <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" id="search-input" placeholder="Search flight, stand, vehicle..." autocomplete="off">
+      </div>
+
+      <div class="area-switcher">
+        <button class="area-btn active" data-area="overview">Overview</button>
+        <button class="area-btn" data-area="terminal">Terminal</button>
+        <button class="area-btn" data-area="cargo">Cargo</button>
+        <button class="area-btn" data-area="hangar">MRO</button>
+        <button class="area-btn" data-area="runway">Runway</button>
+        <button class="area-btn" data-area="landside">Landside</button>
+      </div>
+
+      <div class="top-controls">
+        <!-- Weather Menu -->
+        <div class="control-dropdown">
+          <button class="pill-btn" id="weather-btn">
+            <span id="weather-label">☀️ Summer</span>
+            <svg width="10" height="6" viewBox="0 0 10 6"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          </button>
+          <div class="dropdown-menu" id="weather-menu">
+            <div class="dropdown-item active" data-weather="summer">☀️ Summer</div>
+            <div class="dropdown-item" data-weather="monsoon">🌧️ Monsoon</div>
+            <div class="dropdown-item" data-weather="fog">🌫️ Winter Fog</div>
+            <div class="dropdown-item" data-weather="snow">❄️ Snow / De-ice</div>
+          </div>
+        </div>
+
+        <!-- Day/Night Toggle -->
+        <button class="pill-btn" id="time-toggle-btn">🌙 Night</button>
+
+        <div class="live-clock" id="live-clock">12:52:00</div>
+        <div class="user-avatar" title="Sanjai Operations Controller">SO</div>
+      </div>
+    </header>
+
+    <!-- Dashboard Grid -->
+    <div class="dashboard-grid">
+      <!-- KPI Cards -->
+      <div class="kpi-container">
+        <div class="glass-panel kpi-card">
+          <span class="kpi-label">Active Flights</span>
+          <span class="kpi-value">24 / 28</span>
+          <span class="kpi-sub">▲ +3 vs avg</span>
+        </div>
+        <div class="glass-panel kpi-card">
+          <span class="kpi-label">Apron Punctuality</span>
+          <span class="kpi-value">96.4%</span>
+          <span class="kpi-sub">▲ On schedule</span>
+        </div>
+        <div class="glass-panel kpi-card">
+          <span class="kpi-label">Ground Vehicles</span>
+          <span class="kpi-value">18 Active</span>
+          <span class="kpi-sub">0 Conflicts</span>
+        </div>
+        <div class="glass-panel kpi-card">
+          <span class="kpi-label">Hourly Pax Throughput</span>
+          <span class="kpi-value">4,820</span>
+          <span class="kpi-sub">▲ Peak hour</span>
+        </div>
+        <div class="glass-panel alerts-ticker">
+          <div class="alert-badge">Alert</div>
+          <div class="alert-text">Flight SJ-482 completed quick turnaround at Gate 3. De-icing operational readiness check cleared.</div>
+        </div>
+      </div>
+
+      <!-- Left Sidebar: Turnaround Tracker -->
+      <div class="glass-panel interactive-panel sidebar-left">
+        <div class="panel-header">
+          <div class="panel-title">Turnaround Tracker</div>
+          <span class="status-pill active">Live</span>
+        </div>
+        <div class="turnaround-content">
+          <div class="flight-head-mini">
+            <div>
+              <div class="flight-callsign">SJ-482</div>
+              <div class="flight-dest">A320neo • Reg: VT-SJA</div>
+            </div>
+            <div style="text-align: right;">
+              <div style="font-size: 11px; font-weight: 600; color: var(--text-muted);">Gate 03</div>
+              <div style="font-size: 12px; font-weight: 700; color: #10B981;">Turnaround 74%</div>
+            </div>
+          </div>
+          <div class="timeline">
+            <div class="timeline-item completed">
+              <div class="timeline-dot"></div>
+              <div class="timeline-title">On Block (Arrival)</div>
+              <div class="timeline-time">12:34 UTC</div>
+            </div>
+            <div class="timeline-item completed">
+              <div class="timeline-dot"></div>
+              <div class="timeline-title">Deboard Pax & Baggage</div>
+              <div class="timeline-time">12:38 UTC</div>
+            </div>
+            <div class="timeline-item active">
+              <div class="timeline-dot"></div>
+              <div class="timeline-title">Clean & Cater</div>
+              <div class="timeline-time">Est. 5m remaining</div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-title">Refuel (14.2 Tonnes Jet-A1)</div>
+              <div class="timeline-time">Scheduled 12:56</div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-title">Boarding (162 Pax)</div>
+              <div class="timeline-time">Scheduled 13:02</div>
+            </div>
+            <div class="timeline-item">
+              <div class="timeline-dot"></div>
+              <div class="timeline-title">Pushback & Engine Start</div>
+              <div class="timeline-time">Scheduled 13:18</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Center: Tabbed Live Table -->
+      <div class="glass-panel interactive-panel bottom-table-container">
+        <div class="table-tabs">
+          <button class="tab-btn active" data-tab="stands">Stands & Gates</button>
+          <button class="tab-btn" data-tab="vehicles">Ground Fleet</button>
+          <button class="tab-btn" data-tab="flights">Scheduled Flights</button>
+        </div>
+        <div class="table-content" id="table-content-area">
+          <!-- Dynamically populated or default stands table -->
+          <table>
+            <thead>
+              <tr>
+                <th>Stand</th>
+                <th>Aircraft / Reg</th>
+                <th>Flight</th>
+                <th>Status</th>
+                <th>Phase</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="mono">GATE 01</td>
+                <td class="mono">A320 (VT-SJB)</td>
+                <td class="mono">SJ-102</td>
+                <td><span class="status-pill active">Active</span></td>
+                <td>Boarding</td>
+              </tr>
+              <tr>
+                <td class="mono">GATE 02</td>
+                <td class="mono">A320 (VT-SJC)</td>
+                <td class="mono">SJ-204</td>
+                <td><span class="status-pill taxi">Taxi Out</span></td>
+                <td>Pushback</td>
+              </tr>
+              <tr>
+                <td class="mono">GATE 03</td>
+                <td class="mono">A320 (VT-SJA)</td>
+                <td class="mono">SJ-482</td>
+                <td><span class="status-pill stand">Turnaround</span></td>
+                <td>Catering</td>
+              </tr>
+              <tr>
+                <td class="mono">GATE 04</td>
+                <td class="mono">A320neo (VT-SJD)</td>
+                <td class="mono">SJ-512</td>
+                <td><span class="status-pill active">Scheduled</span></td>
+                <td>Standby</td>
+              </tr>
+              <tr>
+                <td class="mono">GATE 05</td>
+                <td class="mono">B737F (VT-CAR)</td>
+                <td class="mono">SJ-880</td>
+                <td><span class="status-pill stand">Cargo Bay</span></td>
+                <td>Unloading</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Right Sidebar: Live Detail Panel -->
+      <div class="glass-panel interactive-panel sidebar-right">
+        <div class="panel-header">
+          <div class="panel-title">Asset Telemetry</div>
+          <span style="font-size: 11px; font-weight: 600; color: var(--text-muted);" id="selected-type-tag">Aircraft</span>
+        </div>
+        <div class="detail-body" id="detail-body-content">
+          <div class="detail-banner">
+            <span class="detail-category" id="det-category">Commercial Airliner</span>
+            <span class="detail-name" id="det-name">SJ-482 • VT-SJA</span>
+          </div>
+          <div class="stats-grid">
+            <div class="stat-box">
+              <span class="stat-label">Aircraft Type</span>
+              <span class="stat-val" id="det-type">Airbus A320neo</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Fuel Load</span>
+              <span class="stat-val" id="det-fuel">14.2 Tonnes</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Passenger Count</span>
+              <span class="stat-val" id="det-pax">162 / 180</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Ground Speed</span>
+              <span class="stat-val" id="det-speed">0.0 knots</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Assigned Gate</span>
+              <span class="stat-val" id="det-gate">Gate 03</span>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Squawk Code</span>
+              <span class="stat-val" id="det-squawk">5214</span>
+            </div>
+          </div>
+          <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted);">
+            Telemetry stream connected to Sanjai ATC radar feed. All systems operating within nominal parameters.
+          </div>
+          <div class="action-row">
+            <button class="btn" id="btn-follow">Follow Target</button>
+            <button class="btn btn-secondary" id="btn-reset-cam">Reset View</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3D World Floating Label Container -->
+  <div id="labels-container">
+    <div id="label-plane-1" class="object-label">SJ-102 (Gate 1)</div>
+    <div id="label-plane-2" class="object-label">SJ-204 (Taxiing)</div>
+    <div id="label-tower" class="object-label">ATC Tower</div>
+    <div id="label-cargo" class="object-label">Cargo Freighter</div>
+  </div>
+
+  <script>
+    // --- Application State & Configuration ---
+    const STATE = {
+      weather: 'summer', // summer, monsoon, fog, snow
+      isNight: false,
+      selectedObject: null,
+      followedObject: null,
+      activeArea: 'overview',
+      timeSpeed: 1,
+      simTime: new Date(2026, 9, 12, 12, 52, 0)
+    };
+
+    // --- Three.js Scene Setup ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xF7F5F0);
+    scene.fog = new THREE.FogExp2(0xF7F5F0, 0.003);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 2000);
+    camera.position.set(120, 100, 140);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05; // Don't go below ground
+    controls.minDistance = 30;
+    controls.maxDistance = 400;
+    controls.target.set(0, 0, 0);
+
+    // --- Lighting ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xfff5eb, 1.2);
+    dirLight.position.set(150, 200, 100);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 2048;
+    dirLight.shadow.mapSize.height = 2048;
+    dirLight.shadow.camera.near = 0.5;
+    dirLight.shadow.camera.far = 600;
+    const d = 180;
+    dirLight.shadow.camera.left = -d;
+    dirLight.shadow.camera.right = d;
+    dirLight.shadow.camera.top = d;
+    dirLight.shadow.camera.bottom = -d;
+    dirLight.shadow.bias = -0.0005;
+    scene.add(dirLight);
+
+    const groundGridGroup = new THREE.Group();
+    scene.add(groundGridGroup);
+
+    // --- Materials (Low-poly Toy Clay Look) ---
+    const materials = {
+      ground: new THREE.MeshLambertMaterial({ color: 0xE8E4DC }),
+      grass: new THREE.MeshLambertMaterial({ color: 0xD0D9C0 }),
+      runway: new THREE.MeshLambertMaterial({ color: 0x2A2D34 }),
+      runwayStripe: new THREE.MeshBasicMaterial({ color: 0xFFFFFF }),
+      taxiway: new THREE.MeshLambertMaterial({ color: 0x3A3E47 }),
+      concrete: new THREE.MeshLambertMaterial({ color: 0xD5D0C7 }),
+      terminalGlass: new THREE.MeshPhysicalMaterial({ color: 0x88CCEE, transparent: true, opacity: 0.6, roughness: 0.1, metalness: 0.1 }),
+      terminalFrame: new THREE.MeshLambertMaterial({ color: 0x2C3038 }),
+      roof: new THREE.MeshLambertMaterial({ color: 0xE2E0DB }),
+      orangeAccent: new THREE.MeshLambertMaterial({ color: 0xFF6A1A }),
+      planeBody: new THREE.MeshLambertMaterial({ color: 0xFAFAFA }),
+      planeWing: new THREE.MeshLambertMaterial({ color: 0xEEEEEE }),
+      planeTail: new THREE.MeshLambertMaterial({ color: 0xFF6A1A }),
+      vehicleBody: new THREE.MeshLambertMaterial({ color: 0xFFB020 }),
+      vehicleRed: new THREE.MeshLambertMaterial({ color: 0xEF4444 }),
+      vehicleWhite: new THREE.MeshLambertMaterial({ color: 0xFFFFFF }),
+      carBlue: new THREE.MeshLambertMaterial({ color: 0x3B82F6 }),
+      carDark: new THREE.MeshLambertMaterial({ color: 0x1F2937 }),
+      treeTrunk: new THREE.MeshLambertMaterial({ color: 0x8B5A2B }),
+      treeLeaves: new THREE.MeshLambertMaterial({ color: 0x4A7C59 }),
+      water: new THREE.MeshLambertMaterial({ color: 0x60A5FA, transparent: true, opacity: 0.8 }),
+      lightGlow: new THREE.MeshBasicMaterial({ color: 0xFFEE88 })
+    };
+
+    // --- Procedural Low-Poly Airport World Construction ---
+    function buildAirportWorld() {
+      // 1. Base Terrain
+      const terrainGeo = new THREE.PlaneGeometry(600, 600, 32, 32);
+      const terrainMesh = new THREE.Mesh(terrainGeo, materials.ground);
+      terrainMesh.rotation.x = -Math.PI / 2;
+      terrainMesh.position.y = -0.2;
+      terrainMesh.receiveShadow = true;
+      groundGridGroup.add(terrainMesh);
+
+      // Green grass patches around airport
+      const grassGeo = new THREE.PlaneGeometry(580, 580);
+      const grassMesh = new THREE.Mesh(grassGeo, materials.grass);
+      grassMesh.rotation.x = -Math.PI / 2;
+      grassMesh.position.y = -0.15;
+      grassMesh.receiveShadow = true;
+      groundGridGroup.add(grassMesh);
+
+      // 2. Runway (runs horizontally / East-West across the middle)
+      const runwayGeo = new THREE.BoxGeometry(450, 0.2, 45);
+      const runwayMesh = new THREE.Mesh(runwayGeo, materials.runway);
+      runwayMesh.position.set(0, 0.05, -80);
+      runwayMesh.receiveShadow = true;
+      groundGridGroup.add(runwayMesh);
+
+      // Runway Center Dashes & Thresholds
+      for (let x = -200; x <= 200; x += 15) {
+        const dashGeo = new THREE.BoxGeometry(8, 0.25, 2.5);
+        const dash = new THREE.Mesh(dashGeo, materials.runwayStripe);
+        dash.position.set(x, 0.12, -80);
+        groundGridGroup.add(dash);
+      }
+
+      // Runway Edge Lights (glow spheres)
+      for (let x = -220; x <= 220; x += 20) {
+        [-23, 23].forEach(zOffset => {
+          const lightGeo = new THREE.SphereGeometry(0.6, 8, 8);
+          const lightMesh = new THREE.Mesh(lightGeo, materials.lightGlow);
+          lightMesh.position.set(x, 0.3, -80 + zOffset);
+          groundGridGroup.add(lightMesh);
+        });
+      }
+
+      // 3. Parallel Taxiway & Apron
+      const taxiwayGeo = new THREE.BoxGeometry(440, 0.18, 22);
+      const taxiwayMesh = new THREE.Mesh(taxiwayGeo, materials.taxiway);
+      taxiwayMesh.position.set(0, 0.06, -30);
+      taxiwayMesh.receiveShadow = true;
+      groundGridGroup.add(taxiwayMesh);
+
+      // Apron area in front of terminal
+      const apronGeo = new THREE.BoxGeometry(260, 0.16, 50);
+      const apronMesh = new THREE.Mesh(apronGeo, materials.concrete);
+      apronMesh.position.set(0, 0.07, 0);
+      apronMesh.receiveShadow = true;
+      groundGridGroup.add(apronMesh);
+
+      // 4. Terminal Building with Glass Facade & 5 Gates
+      const termGroup = new THREE.Group();
+      termGroup.position.set(0, 0, 32);
+
+      // Main Terminal Concourse Body
+      const termBodyGeo = new THREE.BoxGeometry(220, 16, 35);
+      const termBody = new THREE.Mesh(termBodyGeo, materials.roof);
+      termBody.position.y = 8;
+      termBody.castShadow = true;
+      termBody.receiveShadow = true;
+      termGroup.add(termBody);
+
+      // Glass Facade (facing apron)
+      const glassGeo = new THREE.BoxGeometry(214, 12, 1);
+      const glassFacade = new THREE.Mesh(glassGeo, materials.terminalGlass);
+      glassFacade.position.set(0, 6, 17.5);
+      termGroup.add(glassFacade);
+
+      // Orange Accent Stripe across terminal
+      const stripeGeo = new THREE.BoxGeometry(220, 1.2, 1.2);
+      const accentStripe = new THREE.Mesh(stripeGeo, materials.orangeAccent);
+      accentStripe.position.set(0, 12, 17.4);
+      termGroup.add(accentStripe);
+
+      // 5 Gates with Jet Bridges
+      const gatePositions = [-80, -40, 0, 40, 80];
+      gatePositions.forEach((gx, idx) => {
+        // Stand markings
+        const markGeo = new THREE.RingGeometry(5, 5.6, 32);
+        const markMat = new THREE.MeshBasicMaterial({ color: 0xFFFFFF, side: THREE.DoubleSide });
+        const marker = new THREE.Mesh(markGeo, markMat);
+        marker.rotation.x = -Math.PI / 2;
+        marker.position.set(gx, 0.1, 28);
+        groundGridGroup.add(marker);
+
+        // Jet Bridge tunnel
+        const jbBase = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 14), materials.terminalFrame);
+        jbBase.position.set(gx, 4, 23);
+        jbBase.castShadow = true;
+        termGroup.add(jbBase);
+      });
+
+      groundGridGroup.add(termGroup);
+
+      // 5. Control Tower
+      const towerGroup = new THREE.Group();
+      towerGroup.position.set(130, 0, 15);
+      
+      const stemGeo = new THREE.CylinderGeometry(3.5, 4.5, 45, 16);
+      const stem = new THREE.Mesh(stemGeo, materials.concrete);
+      stem.position.y = 22.5;
+      stem.castShadow = true;
+      towerGroup.add(stem);
+
+      const cabGeo = new THREE.CylinderGeometry(7, 6, 8, 16);
+      const cab = new THREE.Mesh(cabGeo, materials.terminalGlass);
+      cab.position.y = 48;
+      cab.castShadow = true;
+      towerGroup.add(cab);
+
+      const roofGeo = new THREE.ConeGeometry(7.5, 3, 16);
+      const towerRoof = new THREE.Mesh(roofGeo, materials.orangeAccent);
+      towerRoof.position.y = 53.5;
+      towerGroup.add(towerRoof);
+
+      groundGridGroup.add(towerGroup);
+
+      // 6. Cargo Terminal with ULD Stacks & Freighter
+      const cargoGroup = new THREE.Group();
+      cargoGroup.position.set(-160, 0, 10);
+
+      const cargoW = new THREE.Mesh(new THREE.BoxGeometry(70, 12, 40), materials.roof);
+      cargoW.position.y = 6;
+      cargoW.castShadow = true;
+      cargoGroup.add(cargoW);
+
+      // ULD Stacks (Cargo pallets)
+      for (let i = 0; i < 6; i++) {
+        const uld = new THREE.Mesh(new THREE.BoxGeometry(3, 2.5, 3), materials.terminalFrame);
+        uld.position.set(-25 + (i % 3) * 4, 1.25, 25 + Math.floor(i / 3) * 4);
+        uld.castShadow = true;
+        cargoGroup.add(uld);
+      }
+
+      groundGridGroup.add(cargoGroup);
+
+      // 7. Open MRO Hangar
+      const hangarGroup = new THREE.Group();
+      hangarGroup.position.set(160, 0, 10);
+
+      const hangarBody = new THREE.Mesh(new THREE.BoxGeometry(60, 18, 50), materials.concrete);
+      hangarBody.position.y = 9;
+      hangarBody.castShadow = true;
+      hangarGroup.add(hangarBody);
+
+      // Hangar Arch / Open bay
+      const archGeom = new THREE.BoxGeometry(45, 14, 2);
+      const archCutout = new THREE.Mesh(archGeom, materials.runway);
+      archCutout.position.set(0, 7, 25);
+      hangarGroup.add(archCutout);
+
+      groundGridGroup.add(hangarGroup);
+
+      // 8. Landside Forecourt, Drop-off loop & Car Parks
+      const roadGeo = new THREE.BoxGeometry(400, 0.15, 12);
+      const mainRoad = new THREE.Mesh(roadGeo, materials.runway);
+      mainRoad.position.set(0, 0.08, 65);
+      mainRoad.receiveShadow = true;
+      groundGridGroup.add(mainRoad);
+
+      // Drop-off loop
+      const loopGeo = new THREE.RingGeometry(18, 24, 32);
+      const loopMat = new THREE.MeshBasicMaterial({ color: 0x4A4E58, side: THREE.DoubleSide });
+      const dropLoop = new THREE.Mesh(loopGeo, loopMat);
+      dropLoop.rotation.x = -Math.PI / 2;
+      dropLoop.position.set(0, 0.1, 52);
+      groundGridGroup.add(dropLoop);
+
+      // Car Park Lots
+      [-100, 100].forEach(px => {
+        const parkGeo = new THREE.BoxGeometry(70, 0.1, 40);
+        const parkMesh = new THREE.Mesh(parkGeo, materials.taxiway);
+        parkMesh.position.set(px, 0.09, 65);
+        groundGridGroup.add(parkMesh);
+
+        // Little cars parked
+        for (let r = 0; r < 4; r++) {
+          for (let c = 0; c < 6; c++) {
+            const carP = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.5, 1.8), Math.random() > 0.5 ? materials.carBlue : materials.carDark);
+            carP.position.set(px - 25 + c * 10, 0.8, 52 + r * 8);
+            carP.castShadow = true;
+            groundGridGroup.add(carP);
+          }
+        }
+      });
+
+      // 9. Palms & Trees around landside
+      for (let i = -180; i <= 180; i += 30) {
+        if (Math.abs(i) < 25) return;
+        createTree(i, 85);
+        createTree(i, 45);
+      }
+    }
+
+    function createTree(x, z) {
+      const treeGroup = new THREE.Group();
+      const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, 4, 8), materials.treeTrunk);
+      trunk.position.y = 2;
+      trunk.castShadow = true;
+      treeGroup.add(trunk);
+
+      const leaves = new THREE.Mesh(new THREE.ConeGeometry(3, 6, 7), materials.treeLeaves);
+      leaves.position.y = 6;
+      leaves.castShadow = true;
+      treeGroup.add(leaves);
+
+      treeGroup.position.set(x, 0, z);
+      groundGridGroup.add(treeGroup);
+    }
+
+    buildAirportWorld();
+
+    // --- Procedural Aircraft (A320-style) & Vehicles ---
+    const aircrafts = [];
+    const vehicles = [];
+
+    function createA320() {
+      const group = new THREE.Group();
+
+      // Fuselage
+      const fuselage = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.2, 36, 16), materials.planeBody);
+      fuselage.rotation.z = Math.PI / 2;
+      fuselage.castShadow = true;
+      group.add(fuselage);
+
+      // Cockpit windows (dark band)
+      const cockpit = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.2, 3), materials.carDark);
+      cockpit.position.set(15, 0.6, 0);
+      group.add(cockpit);
+
+      // Wings with Winglets
+      const wingGeo = new THREE.BoxGeometry(6, 0.2, 38);
+      const wings = new THREE.Mesh(wingGeo, materials.planeWing);
+      wings.position.set(0, 0, 0);
+      wings.castShadow = true;
+      group.add(wings);
+
+      // Winglets (sharklets at tips)
+      [19, -19].forEach(wz => {
+        const winglet = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2, 0.4), materials.orangeAccent);
+        winglet.position.set(-1, 1, wz);
+        winglet.rotation.z = 0.3;
+        group.add(winglet);
+      });
+
+      // Engines (turbofans under wings)
+      [-10, 10].forEach(wz => {
+        const pylon = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.5, 1.5), materials.planeWing);
+        pylon.position.set(1, -1, wz);
+        group.add(pylon);
+
+        const engine = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.4, 4.5, 16), materials.concrete);
+        engine.rotation.x = Math.PI / 2;
+        engine.position.set(1, -2, wz);
+        engine.castShadow = true;
+        group.add(engine);
+      });
+
+      // Tail (Vertical & Horizontal Stabilizers)
+      const vTail = new THREE.Mesh(new THREE.BoxGeometry(0.4, 5, 4), materials.planeTail);
+      vTail.position.set(-16, 3.5, 0);
+      vTail.rotation.x = -0.3;
+      group.add(vTail);
+
+      const hTail = new THREE.Mesh(new THREE.BoxGeometry(3, 0.2, 10), materials.planeWing);
+      hTail.position.set(-16, 2, 0);
+      group.add(hTail);
+
+      scene.add(group);
+      return group;
+    }
+
+    // Spawn 2 main aircraft on schedule loop
+    const plane1 = createA320();
+    const plane2 = createA320();
+
+    aircrafts.push({
+      mesh: plane1,
+      callsign: 'SJ-102',
+      reg: 'VT-SJB',
+      type: 'Airbus A320neo',
+      phase: 'Boarding',
+      gate: 'Gate 01',
+      fuel: '15.6 Tonnes',
+      pax: '174 / 180',
+      squawk: '4210',
+      progress: 0.1
+    });
+
+    aircrafts.push({
+      mesh: plane2,
+      callsign: 'SJ-204',
+      reg: 'VT-SJC',
+      type: 'Airbus A320',
+      phase: 'Taxi Out',
+      gate: 'Gate 02',
+      fuel: '12.8 Tonnes',
+      pax: '158 / 180',
+      squawk: '1104',
+      progress: 0.65
+    });
+
+    // Ground vehicles (Baggage tug, Fuel truck, Catering lift)
+    function createVehicle(type, colorMat) {
+      const g = new THREE.Group();
+      const body = new THREE.Mesh(new THREE.BoxGeometry(4, 2, 2.2), colorMat);
+      body.position.y = 1;
+      body.castShadow = true;
+      g.add(body);
+
+      if (type === 'catering') {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(5, 3.5, 2.4), materials.vehicleWhite);
+        box.position.set(-1, 3.2, 0);
+        box.castShadow = true;
+        g.add(box);
+      } else if (type === 'fuel') {
+        const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 6, 12), materials.vehicleWhite);
+        tank.rotation.z = Math.PI / 2;
+        tank.position.set(0, 1.8, 0);
+        tank.castShadow = true;
+        g.add(tank);
+      }
+
+      scene.add(g);
+      return { mesh: g, type: type, progress: Math.random() };
+    }
+
+    vehicles.push(createVehicle('baggage', materials.vehicleBody));
+    vehicles.push(createVehicle('fuel', materials.vehicleWhite));
+    vehicles.push(createVehicle('catering', materials.vehicleRed));
+
+    // Landside traffic cars
+    const landsideCars = [];
+    for (let i = 0; i < 6; i++) {
+      const carGroup = new THREE.Group();
+      const carBody = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.4, 1.8), Math.random() > 0.5 ? materials.vehicleRed : materials.carBlue);
+      carBody.position.y = 0.9;
+      carBody.castShadow = true;
+      carGroup.add(carBody);
+      scene.add(carGroup);
+      landsideCars.push({ mesh: carGroup, progress: i * 0.16, speed: 0.002 });
+    }
+
+    // --- Weather & Environment Particle System ---
+    let particleSystem = null;
+    function setupWeather(type) {
+      if (particleSystem) {
+        scene.remove(particleSystem);
+        particleSystem = null;
+      }
+
+      if (type === 'summer') {
+        scene.background.setHex(0xF7F5F0);
+        scene.fog.color.setHex(0xF7F5F0);
+        dirLight.intensity = 1.2;
+      } else if (type === 'monsoon') {
+        scene.background.setHex(0x3A4250);
+        scene.fog.color.setHex(0x3A4250);
+        dirLight.intensity = 0.4;
+        createRainParticles();
+      } else if (type === 'fog') {
+        scene.background.setHex(0x9CA3AF);
+        scene.fog.color.setHex(0x9CA3AF);
+        scene.fog.density = 0.015;
+        dirLight.intensity = 0.5;
+      } else if (type === 'snow') {
+        scene.background.setHex(0xE5E7EB);
+        scene.fog.color.setHex(0xE5E7EB);
+        dirLight.intensity = 0.8;
+        createSnowParticles();
+      }
+    }
+
+    function createRainParticles() {
+      const count = 3000;
+      const geom = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 3);
+      for (let i = 0; i < count * 3; i += 3) {
+        positions[i] = (Math.random() - 0.5) * 500;
+        positions[i+1] = Math.random() * 200;
+        positions[i+2] = (Math.random() - 0.5) * 500;
+      }
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.PointsMaterial({ color: 0x88CCFF, size: 1.2, transparent: true, opacity: 0.6 });
+      particleSystem = new THREE.Points(geom, mat);
+      scene.add(particleSystem);
+    }
+
+    function createSnowParticles() {
+      const count = 2000;
+      const geom = new THREE.BufferGeometry();
+      const positions = new Float32Array(count * 3);
+      for (let i = 0; i < count * 3; i += 3) {
+        positions[i] = (Math.random() - 0.5) * 500;
+        positions[i+1] = Math.random() * 200;
+        positions[i+2] = (Math.random() - 0.5) * 500;
+      }
+      geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      const mat = new THREE.PointsMaterial({ color: 0xFFFFFF, size: 2.2, transparent: true, opacity: 0.8 });
+      particleSystem = new THREE.Points(geom, mat);
+      scene.add(particleSystem);
+    }
+
+    // --- Interaction & Raycasting (Clicking 3D Objects) ---
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    window.addEventListener('pointerdown', (e) => {
+      // Ignore if clicking UI
+      if (e.target.closest('.interactive') || e.target.closest('header')) return;
+
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      
+      // Check intersection with aircraft meshes
+      const intersects = raycaster.intersectObjects(scene.children, true);
+      if (intersects.length > 0) {
+        // Find top group parent
+        let obj = intersects[0].object;
+        while (obj.parent && obj.parent !== scene) {
+          obj = obj.parent;
+        }
+
+        // Match with aircrafts
+        const foundPlane = aircrafts.find(p => p.mesh === obj);
+        if (foundPlane) {
+          selectObject(foundPlane);
+        }
+      }
+    });
+
+    function selectObject(data) {
+      STATE.selectedObject = data;
+      STATE.followedObject = data; // Auto follow selected
+
+      // Update right detail panel
+      document.getElementById('det-category').textContent = data.type;
+      document.getElementById('det-name').textContent = `${data.callsign} • ${data.reg}`;
+      document.getElementById('det-type').textContent = data.type;
+      document.getElementById('det-fuel').textContent = data.fuel;
+      document.getElementById('det-pax').textContent = data.pax;
+      document.getElementById('det-gate').textContent = data.gate;
+      document.getElementById('det-squawk').textContent = data.squawk;
+      document.getElementById('selected-type-tag').textContent = 'Aircraft Telemetry';
+    }
+
+    // --- Area Switcher Camera Coordinates ---
+    const presetCameras = {
+      overview: { pos: [120, 100, 140], target: [0, 0, 0] },
+      terminal: { pos: [0, 35, 75], target: [0, 10, 32] },
+      cargo: { pos: [-160, 40, 60], target: [-160, 5, 10] },
+      hangar: { pos: [160, 45, 70], target: [160, 10, 10] },
+      runway: { pos: [0, 70, 10], target: [0, 0, -80] },
+      landside: { pos: [0, 50, 120], target: [0, 0, 55] }
+    };
+
+    function flyToArea(areaKey) {
+      const preset = presetCameras[areaKey];
+      if (!preset) return;
+      STATE.followedObject = null; // release follow on manual area switch
+
+      const startPos = camera.position.clone();
+      const targetPos = new THREE.Vector3(...preset.pos);
+      const startTarget = controls.target.clone();
+      const endTarget = new THREE.Vector3(...preset.target);
+
+      let t = 0;
+      function animCam() {
+        t += 0.04;
+        camera.position.lerpVectors(startPos, targetPos, easeOutCubic(t));
+        controls.target.lerpVectors(startTarget, endTarget, easeOutCubic(t));
+        controls.update();
+        if (t < 1) requestAnimationFrame(animCam);
+      }
+      animCam();
+    }
+
+    function easeOutCubic(x) {
+      return 1 - Math.pow(1 - x, 3);
+    }
+
+    // --- Animation & Simulation Loop ---
+    let clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      const elapsedTime = clock.getElapsedTime();
+
+      // Update simulation clock time
+      if (Math.random() < 0.05) {
+        STATE.simTime.setSeconds(STATE.simTime.getSeconds() + 1);
+        const hours = String(STATE.simTime.getHours()).padStart(2, '0');
+        const mins = String(STATE.simTime.getMinutes()).padStart(2, '0');
+        const secs = String(STATE.simTime.getSeconds()).padStart(2, '0');
+        document.getElementById('live-clock').textContent = `${hours}:${mins}:${secs}`;
+      }
+
+      // Aircraft cycling behavior (Taxiing along taxiway & runway)
+      aircrafts.forEach((ac, idx) => {
+        ac.progress += delta * 0.03 * STATE.timeSpeed;
+        if (ac.progress > 1) ac.progress = 0;
+
+        const p = ac.progress;
+        let x = 0, z = 0, rot = 0;
+
+        if (p < 0.25) {
+          // Parked at Gate
+          x = -80 + idx * 80;
+          z = 28;
+          rot = 0;
+          ac.phase = 'Boarding';
+        } else if (p < 0.5) {
+          // Taxiing to runway
+          const tNorm = (p - 0.25) * 4;
+          x = THREE.MathUtils.lerp(-80 + idx * 80, 180, tNorm);
+          z = THREE.MathUtils.lerp(28, -30, tNorm);
+          rot = -Math.PI / 2;
+          ac.phase = 'Taxi Out';
+        } else if (p < 0.75) {
+          // Takeoff roll & airborne
+          const tNorm = (p - 0.5) * 4;
+          x = THREE.MathUtils.lerp(180, -180, tNorm);
+          z = -80;
+          rot = Math.PI;
+          ac.phase = tNorm > 0.4 ? 'In Flight' : 'Takeoff Roll';
+        } else {
+          // Landing & taxi back
+          const tNorm = (p - 0.75) * 4;
+          x = THREE.MathUtils.lerp(-180, -80 + idx * 80, tNorm);
+          z = THREE.MathUtils.lerp(-80, 28, tNorm);
+          rot = Math.PI / 2;
+          ac.phase = 'Arrived / Taxi';
+        }
+
+        ac.mesh.position.set(x, p >= 0.5 && p < 0.75 ? (p - 0.5) * 40 : 0.5, z);
+        ac.mesh.rotation.y = rot;
+      });
+
+      // Ground vehicles movement loop
+      vehicles.forEach((v, idx) => {
+        v.progress += delta * 0.08;
+        if (v.progress > 1) v.progress = 0;
+        const angle = v.progress * Math.PI * 2;
+        v.mesh.position.set(Math.cos(angle) * 45 + idx * 20, 0.2, Math.sin(angle) * 15 + 10);
+        v.mesh.rotation.y = -angle;
+      });
+
+      // Landside traffic cars
+      landsideCars.forEach(car => {
+        car.progress += delta * 0.05 * car.speed * 100;
+        if (car.progress > 1) car.progress = 0;
+        car.mesh.position.set(-180 + car.progress * 360, 0.7, 65);
+      });
+
+      // Particle system rotation / fall
+      if (particleSystem) {
+        const positions = particleSystem.geometry.attributes.position.array;
+        for (let i = 1; i < positions.length; i += 3) {
+          positions[i] -= 1.5;
+          if (positions[i] < 0) positions[i] = 200;
+        }
+        particleSystem.geometry.attributes.position.needsUpdate = true;
+      }
+
+      // Camera Follow Target
+      if (STATE.followedObject) {
+        const targetPos = STATE.followedObject.mesh.position;
+        controls.target.lerp(targetPos, 0.1);
+        camera.position.x = targetPos.x + 40;
+        camera.position.z = targetPos.z + 40;
+      }
+
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // --- UI Event Listeners & Interactions ---
+
+    // Area Switcher Buttons
+    document.querySelectorAll('.area-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.area-btn').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+        const area = e.target.getAttribute('data-area');
+        STATE.activeArea = area;
+        flyToArea(area);
+      });
+    });
+
+    // Weather Menu Toggle
+    const weatherBtn = document.getElementById('weather-btn');
+    const weatherMenu = document.getElementById('weather-menu');
+    weatherBtn.addEventListener('click', () => weatherMenu.classList.toggle('show'));
+
+    document.querySelectorAll('#weather-menu .dropdown-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        document.querySelectorAll('#weather-menu .dropdown-item').forEach(i => i.classList.remove('active'));
+        e.target.classList.add('active');
+        weatherMenu.classList.remove('show');
+        const weatherKey = e.target.getAttribute('data-weather');
+        STATE.weather = weatherKey;
+        document.getElementById('weather-label').textContent = e.target.textContent;
+        setupWeather(weatherKey);
+      });
+    });
+
+    // Day / Night Toggle
+    const timeToggleBtn = document.getElementById('time-toggle-btn');
+    timeToggleBtn.addEventListener('click', () => {
+      STATE.isNight = !STATE.isNight;
+      if (STATE.isNight) {
+        timeToggleBtn.textContent = '☀️ Day';
+        scene.background.setHex(0x0F172A);
+        scene.fog.color.setHex(0x0F172A);
+        ambientLight.intensity = 0.2;
+        dirLight.intensity = 0.3;
+        dirLight.color.setHex(0x3B82F6);
+      } else {
+        timeToggleBtn.textContent = '🌙 Night';
+        setupWeather(STATE.weather);
+      }
+    });
+
+    // Table Tabs
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+        const tab = e.target.getAttribute('data-tab');
+        const tableArea = document.getElementById('table-content-area');
+
+        if (tab === 'stands') {
+          tableArea.innerHTML = `
+            <table>
+              <thead><tr><th>Stand</th><th>Aircraft / Reg</th><th>Flight</th><th>Status</th><th>Phase</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">GATE 01</td><td class="mono">A320 (VT-SJB)</td><td class="mono">SJ-102</td><td><span class="status-pill active">Active</span></td><td>Boarding</td></tr>
+                <tr><td class="mono">GATE 02</td><td class="mono">A320 (VT-SJC)</td><td class="mono">SJ-204</td><td><span class="status-pill taxi">Taxi Out</span></td><td>Pushback</td></tr>
+                <tr><td class="mono">GATE 03</td><td class="mono">A320 (VT-SJA)</td><td class="mono">SJ-482</td><td><span class="status-pill stand">Turnaround</span></td><td>Catering</td></tr>
+                <tr><td class="mono">GATE 04</td><td class="mono">A320neo (VT-SJD)</td><td class="mono">SJ-512</td><td><span class="status-pill active">Scheduled</span></td><td>Standby</td></tr>
+                <tr><td class="mono">GATE 05</td><td class="mono">B737F (VT-CAR)</td><td class="mono">SJ-880</td><td><span class="status-pill stand">Cargo Bay</span></td><td>Unloading</td></tr>
+              </tbody>
+            </table>`;
+        } else if (tab === 'vehicles') {
+          tableArea.innerHTML = `
+            <table>
+              <thead><tr><th>Unit ID</th><th>Type</th><th>Operator</th><th>Location</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">TUG-01</td><td class="mono">Pushback Tug</td><td>SaneGround</td><td>Gate 03 Stand</td><td><span class="status-pill active">Ready</span></td></tr>
+                <tr><td class="mono">FUEL-04</td><td class="mono">Refueler 20kL</td><td>IndianOil</td><td>Apron North</td><td><span class="status-pill taxi">Dispensing</span></td></tr>
+                <tr><td class="mono">CAT-02</td><td class="mono">Catering Hi-Lift</td><td>TajSATS</td><td>Gate 03</td><td><span class="status-pill active">Elevated</span></td></tr>
+                <tr><td class="mono">BUS-09</td><td class="mono">Pax Apron Bus</td><td>Airport Auth</td><td>Terminal Wing B</td><td><span class="status-pill active">Transit</span></td></tr>
+              </tbody>
+            </table>`;
+        } else if (tab === 'flights') {
+          tableArea.innerHTML = `
+            <table>
+              <thead><tr><th>Flight</th><th>Destination</th><th>Aircraft</th><th>STD</th><th>Gate</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">SJ-102</td><td class="mono">DEL (Delhi)</td><td class="mono">VT-SJB</td><td>13:15</td><td>Gate 01</td></tr>
+                <tr><td class="mono">SJ-204</td><td class="mono">BOM (Mumbai)</td><td class="mono">VT-SJC</td><td>13:30</td><td>Gate 02</td></tr>
+                <tr><td class="mono">SJ-482</td><td class="mono">BLR (Bengaluru)</td><td class="mono">VT-SJA</td><td>13:55</td><td>Gate 03</td></tr>
+                <tr><td class="mono">SJ-512</td><td class="mono">MAA (Chennai)</td><td class="mono">VT-SJD</td><td>14:20</td><td>Gate 04</td></tr>
+              </tbody>
+            </table>`;
+        }
+      });
+    });
+
+    // Detail Panel Action Buttons
+    document.getElementById('btn-follow').addEventListener('click', () => {
+      if (aircrafts.length > 0) selectObject(aircrafts[0]);
+    });
+
+    document.getElementById('btn-reset-cam').addEventListener('click', () => {
+      STATE.followedObject = null;
+      flyToArea('overview');
+    });
+
+    // Window Resize Handling
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
